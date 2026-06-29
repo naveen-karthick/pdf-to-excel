@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@thednp/dommatrix": "^3.0.4",
     "next": "16.2.9",
     "pdf-parse": "^2.4.5",
     "react": "19.2.4",
