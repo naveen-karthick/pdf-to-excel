@@ -138,6 +138,29 @@ function extractTranType(text: string): { tranType: string; particulars: string 
 }
 
 const GRAND_TOTAL_RE = /^GRAND TOTAL\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)/;
+const OPENING_BALANCE_RE = /^Opening Balance\s+(CR|DR)[\s\t]+([\d,]+\.?\d*)/;
+
+function parseOpeningBalance(text: string): Transaction | null {
+  for (const rawLine of text.split("\n")) {
+    const match = rawLine.trim().match(OPENING_BALANCE_RE);
+    if (match) {
+      return {
+        date: "",
+        valueDate: "",
+        particulars: "Opening Balance",
+        tranType: "",
+        tranId: "",
+        chequeDetails: "",
+        withdrawals: "",
+        deposits: "",
+        balance: parseAmount(match[2]),
+        balanceType: match[1],
+      };
+    }
+  }
+
+  return null;
+}
 
 function parseGrandTotal(text: string): { totalWithdrawals: number; totalDeposits: number } | null {
   for (const rawLine of text.split("\n")) {
@@ -155,21 +178,34 @@ function parseGrandTotal(text: string): { totalWithdrawals: number; totalDeposit
 
 function applyGrandTotal(transactions: Transaction[], text: string): Transaction[] {
   const grandTotal = parseGrandTotal(text);
-  if (!grandTotal || transactions.length === 0) {
+  if (!grandTotal) {
     return transactions;
   }
 
-  const lastIndex = transactions.length - 1;
-  const lastTransaction = transactions[lastIndex];
-
   return [
-    ...transactions.slice(0, lastIndex),
+    ...transactions,
     {
-      ...lastTransaction,
-      particulars: `${lastTransaction.particulars} GRAND TOTAL`.trim(),
+      date: "",
+      valueDate: "",
+      particulars: "GRAND TOTAL",
+      tranType: "",
+      tranId: "",
+      chequeDetails: "",
       withdrawals: grandTotal.totalWithdrawals,
+      deposits: grandTotal.totalDeposits,
+      balance: "",
+      balanceType: "",
     },
   ];
+}
+
+function prependOpeningBalance(transactions: Transaction[], text: string): Transaction[] {
+  const openingBalance = parseOpeningBalance(text);
+  if (!openingBalance) {
+    return transactions;
+  }
+
+  return [openingBalance, ...transactions];
 }
 
 function parseTransactions(text: string): Transaction[] {
@@ -213,11 +249,13 @@ function parseTransactions(text: string): Transaction[] {
       const previousBalance = transactions.length
         ? transactions[transactions.length - 1].balance
         : 0;
+      const comparablePreviousBalance =
+        typeof previousBalance === "number" ? previousBalance : 0;
 
       let withdrawals: number | "" = "";
       let deposits: number | "" = "";
-      if (balance > previousBalance) deposits = amount;
-      else if (balance < previousBalance) withdrawals = amount;
+      if (balance > comparablePreviousBalance) deposits = amount;
+      else if (balance < comparablePreviousBalance) withdrawals = amount;
       else deposits = amount;
 
       transactions.push({
@@ -237,7 +275,7 @@ function parseTransactions(text: string): Transaction[] {
     }
   }
 
-  return applyGrandTotal(transactions, text);
+  return applyGrandTotal(prependOpeningBalance(transactions, text), text);
 }
 
 export function isFederalBankStatement(text: string): boolean {

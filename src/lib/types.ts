@@ -7,7 +7,7 @@ export interface Transaction {
   chequeDetails: string;
   withdrawals: number | "";
   deposits: number | "";
-  balance: number;
+  balance: number | "";
   balanceType: string;
 }
 

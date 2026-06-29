@@ -129,6 +129,11 @@ export function generateWorkbook(transactions: Transaction[]): XLSX.WorkBook {
   return workbook;
 }
 
+export function generateExcelArrayBuffer(transactions: Transaction[]): ArrayBuffer {
+  const workbook = generateWorkbook(transactions);
+  return XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+}
+
 export function generateExcelBuffer(transactions: Transaction[]): Buffer {
   const workbook = generateWorkbook(transactions);
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;

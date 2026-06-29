@@ -45,6 +45,10 @@ export function buildDailyBalanceSheet(transactions: Transaction[]): unknown[][]
   const monthColumns = new Set<string>();
 
   for (const transaction of transactions) {
+    if (!transaction.date || typeof transaction.balance !== "number") {
+      continue;
+    }
+
     const date = parseDisplayDate(transaction.date);
     const key = monthKey(date);
     monthColumns.add(key);

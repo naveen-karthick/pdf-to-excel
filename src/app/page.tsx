@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from "react";
 
-type Status = "idle" | "uploading" | "success" | "error";
+import { convertPdfFileToExcel } from "@/lib/convert";
+
+type Status = "idle" | "converting" | "success" | "error";
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
@@ -11,37 +13,19 @@ export default function Home() {
   const [transactionCount, setTransactionCount] = useState<number | null>(null);
 
   const canConvert = useMemo(
-    () => !!file && status !== "uploading",
+    () => !!file && status !== "converting",
     [file, status],
   );
 
   async function handleConvert() {
     if (!file) return;
 
-    setStatus("uploading");
+    setStatus("converting");
     setMessage("");
     setTransactionCount(null);
 
-    const formData = new FormData();
-    formData.append("file", file);
-
     try {
-      const response = await fetch("/api/convert", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const payload = (await response.json()) as { error?: string };
-        throw new Error(payload.error || "Conversion failed.");
-      }
-
-      const blob = await response.blob();
-      const count = response.headers.get("X-Transaction-Count");
-      const filename =
-        response.headers
-          .get("Content-Disposition")
-          ?.match(/filename="(.+)"/)?.[1] || "statement_extracted.xlsx";
+      const { blob, filename, transactionCount: count } = await convertPdfFileToExcel(file);
 
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -51,7 +35,7 @@ export default function Home() {
       URL.revokeObjectURL(url);
 
       setStatus("success");
-      setTransactionCount(count ? Number(count) : null);
+      setTransactionCount(count);
       setMessage("Excel file downloaded successfully.");
     } catch (error) {
       setStatus("error");
@@ -71,7 +55,8 @@ export default function Home() {
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
             Upload a Federal Bank PDF statement and download a structured Excel
-            workbook with transaction details and a daily balance summary.
+            workbook. Everything runs in your browser, so your statement never
+            leaves your device.
           </p>
 
           <div className="mt-8 rounded-2xl border border-dashed border-white/20 bg-slate-950/40 p-6">
@@ -107,7 +92,7 @@ export default function Home() {
             onClick={handleConvert}
             className="mt-6 inline-flex w-full items-center justify-center rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
           >
-            {status === "uploading" ? "Converting..." : "Convert to Excel"}
+            {status === "converting" ? "Converting..." : "Convert to Excel"}
           </button>
 
           {message ? (
@@ -141,7 +126,7 @@ export default function Home() {
         </div>
 
         <p className="mt-6 text-center text-sm text-slate-500">
-          Ready for Vercel deployment. Supports Federal Bank statements today.
+          Client-side conversion with pdf-parse and xlsx-js-style. Supports Federal Bank statements today.
         </p>
       </main>
     </div>
