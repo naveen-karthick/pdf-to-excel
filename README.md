@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PDF to Excel
 
-## Getting Started
+Convert Federal Bank PDF account statements into Excel workbooks, ready to deploy on [Vercel](https://vercel.com).
 
-First, run the development server:
+## Features
+
+- Upload a bank statement PDF in the browser
+- Extract all transactions into a structured `Transactions` sheet
+- Generate a `Daily Balance` summary sheet
+- Download the Excel file immediately
+
+## Supported formats
+
+Currently supports **Federal Bank** account statement PDFs.
+
+## Local development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploy to Vercel
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Push this repository to GitHub
+2. Import the project in Vercel
+3. Deploy with the default Next.js settings
 
-## Learn More
+No environment variables are required.
 
-To learn more about Next.js, take a look at the following resources:
+## API
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`POST /api/convert`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Form field:
 
-## Deploy on Vercel
+- `file`: PDF bank statement
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Returns an `.xlsx` file on success.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Tech stack
+
+- Next.js App Router
+- `pdf-parse` for PDF text extraction
+- `xlsx` for Excel generation
+- Tailwind CSS
