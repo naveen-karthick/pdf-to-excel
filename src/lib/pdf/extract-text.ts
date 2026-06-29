@@ -1,23 +1,28 @@
-let polyfillsApplied = false;
+let environmentReady = false;
 
-async function ensurePdfPolyfills(): Promise<void> {
-  if (polyfillsApplied) {
-    return;
-  }
-
+async function ensurePdfEnvironment(): Promise<{
+  PDFParse: typeof import("pdf-parse").PDFParse;
+  CanvasFactory: typeof import("pdf-parse/worker").CanvasFactory;
+}> {
   if (typeof globalThis.DOMMatrix === "undefined") {
     const { default: DOMMatrix } = await import("@thednp/dommatrix");
     globalThis.DOMMatrix = DOMMatrix as typeof globalThis.DOMMatrix;
   }
 
-  polyfillsApplied = true;
+  const worker = await import("pdf-parse/worker");
+  const { PDFParse } = await import("pdf-parse");
+
+  if (!environmentReady) {
+    PDFParse.setWorker(worker.getData());
+    environmentReady = true;
+  }
+
+  return { PDFParse, CanvasFactory: worker.CanvasFactory };
 }
 
 export async function extractPdfText(buffer: Buffer): Promise<string> {
-  await ensurePdfPolyfills();
-
-  const { PDFParse } = await import("pdf-parse");
-  const parser = new PDFParse({ data: buffer });
+  const { PDFParse, CanvasFactory } = await ensurePdfEnvironment();
+  const parser = new PDFParse({ data: buffer, CanvasFactory });
 
   try {
     const result = await parser.getText();
