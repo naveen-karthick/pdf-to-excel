@@ -14,6 +14,8 @@ const AMOUNTS_SUFFIX_RE =
 const SUMMARY_DATA_RE =
   /^([\d,]+\.\d{2})\s+\d+\s+\d+\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$/;
 
+const PAGE_BREAK_RE = /^-- \d+ of \d+ --$/;
+
 function isSkipLine(line: string): boolean {
   return (
     /^HDFC BANK/i.test(line) ||
@@ -26,11 +28,19 @@ function isSkipLine(line: string): boolean {
     /^Closing Balance Dr Count/i.test(line) ||
     /^Generated On/i.test(line) ||
     /^This is a computer generated/i.test(line) ||
-    /^-- \d+ of \d+ --$/.test(line) ||
     /^STATEMENT SUMMARY/i.test(line) ||
     /^Opening Balance Dr Count/i.test(line) ||
     SUMMARY_DATA_RE.test(line) ||
     /^MS\s+/i.test(line) ||
+    /^M\/S\./i.test(line) ||
+    /^TC \d/i.test(line) ||
+    /^FIRST FLOOR/i.test(line) ||
+    /^Statement From\s*:/i.test(line) ||
+    /^P O,/i.test(line) ||
+    /^KUMARAPURAM,/i.test(line) ||
+    /^THIRUVANANTHAPURAM \d/i.test(line) ||
+    /^THIRUVANANTHAPURAM MEDICAL COLLEGE/i.test(line) ||
+    /^KERALA$/i.test(line) ||
     /^JOINT HOLDERS|^Nomination\s*:|^Address\s*:|^City\s*:|^State\s*:|^Phone no|^OD Limit|^Currency\s*:|^Email\s*:|^Cust ID|^Account No|^A\/C Open|^Account Status|^RTGS\/NEFT|^Branch Code|^Account Type|^\*Closing balance|^Contents of this|^this statement|^State account|^Registered Office|^HDFC Bank GSTIN|^not require signature/i.test(
       line,
     )
@@ -42,7 +52,11 @@ function isTrailingNarrationLine(line: string): boolean {
     return false;
   }
 
-  return /^-/.test(line) || /^[\dA-Za-z][\dA-Za-z-]{0,80}$/.test(line);
+  if (isSkipLine(line) || PAGE_BREAK_RE.test(line)) {
+    return false;
+  }
+
+  return true;
 }
 
 function classifyTransactionAmount(
@@ -51,9 +65,25 @@ function classifyTransactionAmount(
   balance: number,
   previousBalance: number | null,
 ): "withdrawal" | "deposit" {
+  if (previousBalance !== null) {
+    const diff = balance - previousBalance;
+    if (Math.abs(diff - amount) < 0.01) return "deposit";
+    if (Math.abs(diff + amount) < 0.01) return "withdrawal";
+  } else if (Math.abs(balance - amount) < 0.01 && amount > 0) {
+    return "deposit";
+  }
+
   const upper = narration.toUpperCase();
 
-  if (/\bNEFT CR\b|\bRTGS CR\b|\bUPI CR\b|\bIMPS CR\b|CREDIT|\bCR-/.test(upper)) {
+  if (/\bCREDIT CARD\b/.test(upper)) {
+    return "withdrawal";
+  }
+
+  if (/\bNEFT CR\b|\bRTGS CR\b|\bUPI CR\b|\bIMPS CR\b|\bCR-/.test(upper)) {
+    return "deposit";
+  }
+
+  if (/\bCASH DEPOSIT\b|\bUPI SETTLEMENT\b/.test(upper)) {
     return "deposit";
   }
 
@@ -63,12 +93,6 @@ function classifyTransactionAmount(
     )
   ) {
     return "withdrawal";
-  }
-
-  if (previousBalance !== null) {
-    const diff = balance - previousBalance;
-    if (Math.abs(diff - amount) < 0.01) return "deposit";
-    if (Math.abs(diff + amount) < 0.01) return "withdrawal";
   }
 
   return "withdrawal";
@@ -195,15 +219,17 @@ function parseStatementSummary(text: string): {
   return { opening, closing };
 }
 
-function parseTransactions(text: string): Transaction[] {
+function parseTransactions(text: string, openingBalance: number | null = null): Transaction[] {
   const lines = text.split("\n");
   const transactions: Transaction[] = [];
-  let previousBalance: number | null = null;
+  let previousBalance = openingBalance;
 
   let pendingDate = "";
   let pendingNarration: string[] = [];
   let lastTransactionIndex = -1;
   let acceptTrailingNarration = false;
+  let afterPageBreak = false;
+  let pageBreakOrphans: string[] = [];
 
   const resetPending = () => {
     pendingDate = "";
@@ -214,6 +240,15 @@ function parseTransactions(text: string): Transaction[] {
     if (lastTransactionIndex < 0) return;
     const txn = transactions[lastTransactionIndex];
     txn.particulars = normalizeParticulars(`${txn.particulars} ${line}`);
+  };
+
+  const flushPageBreakOrphans = () => {
+    if (pageBreakOrphans.length === 0) {
+      return;
+    }
+
+    appendToLastTransaction(pageBreakOrphans.join(" "));
+    pageBreakOrphans = [];
   };
 
   const appendPendingNarration = (line: string) => {
@@ -245,8 +280,29 @@ function parseTransactions(text: string): Transaction[] {
       continue;
     }
 
+    if (PAGE_BREAK_RE.test(line)) {
+      afterPageBreak = true;
+      pageBreakOrphans = [];
+      acceptTrailingNarration = false;
+      continue;
+    }
+
+    if (afterPageBreak) {
+      if (isSkipLine(line)) {
+        continue;
+      }
+
+      if (TXN_DATE_START_RE.test(line)) {
+        flushPageBreakOrphans();
+        afterPageBreak = false;
+      } else {
+        pageBreakOrphans.push(line);
+        continue;
+      }
+    }
+
     if (isSkipLine(line)) {
-      if (/^STATEMENT SUMMARY/i.test(line) || SUMMARY_DATA_RE.test(line)) {
+      if (/^Page No/i.test(line) || /^STATEMENT SUMMARY/i.test(line) || SUMMARY_DATA_RE.test(line)) {
         acceptTrailingNarration = false;
       }
       continue;
@@ -289,6 +345,8 @@ function parseTransactions(text: string): Transaction[] {
     }
   }
 
+  flushPageBreakOrphans();
+
   return transactions;
 }
 
@@ -298,7 +356,13 @@ export function isHdfcStatement(text: string): boolean {
 
 export function parseHdfcStatement(text: string): ParseResult {
   const { opening, closing } = parseStatementSummary(text);
-  const transactions = parseTransactions(text);
+  const openingBalance =
+    opening && opening.balance !== ""
+      ? typeof opening.balance === "number"
+        ? opening.balance
+        : parseAmount(String(opening.balance))
+      : null;
+  const transactions = parseTransactions(text, openingBalance);
 
   const rows: Transaction[] = [];
   if (opening) rows.push(opening);
