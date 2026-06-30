@@ -1,26 +1,20 @@
 import { buildDownloadFilename, generateExcelArrayBuffer } from "@/lib/excel/generator";
-import {
-  isFederalBankStatement,
-  parseFederalBankStatement,
-} from "@/lib/parser/federal-bank";
+import { parseBankStatement } from "@/lib/parser";
 import { extractPdfTextFromFile } from "@/lib/pdf/extract-text-client";
 
 export interface ConvertResult {
   blob: Blob;
   filename: string;
   transactionCount: number;
+  bankName: string;
 }
 
-export async function convertPdfFileToExcel(file: File): Promise<ConvertResult> {
-  const text = await extractPdfTextFromFile(file);
-
-  if (!isFederalBankStatement(text)) {
-    throw new Error(
-      "This PDF format is not supported yet. Currently, Federal Bank account statements are supported.",
-    );
-  }
-
-  const { transactions } = parseFederalBankStatement(text);
+export async function convertPdfFileToExcel(
+  file: File,
+  password?: string,
+): Promise<ConvertResult> {
+  const text = await extractPdfTextFromFile(file, password);
+  const { transactions, bankName } = parseBankStatement(text);
 
   if (!transactions.length) {
     throw new Error("No transactions were found in this statement.");
@@ -35,5 +29,6 @@ export async function convertPdfFileToExcel(file: File): Promise<ConvertResult> 
     }),
     filename,
     transactionCount: transactions.length,
+    bankName,
   };
 }

@@ -1,5 +1,11 @@
 import type { ParseResult, Transaction } from "@/lib/types";
 
+import {
+  formatDateFromDash,
+  normalizeParticulars,
+  parseAmount,
+} from "@/lib/parser/shared";
+
 const TRAN_TYPES = new Set([
   "TRF",
   "MB",
@@ -93,33 +99,6 @@ function isAccountMetaLine(line: string): boolean {
     /^statement date\./.test(line) ||
     /^Contents of this statement/.test(line)
   );
-}
-
-function parseAmount(value: string): number {
-  return parseFloat(value.replace(/,/g, ""));
-}
-
-function formatDate(date: string): string {
-  const [day, month, year] = date.split("-");
-  const months = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-  return `${day}-${months[parseInt(month, 10) - 1]}-${year}`;
-}
-
-function normalizeParticulars(text: string): string {
-  return text.replace(/\s+/g, " ").replace(/([A-Za-z0-9]) \//g, "$1/").trim();
 }
 
 function extractTranType(text: string): { tranType: string; particulars: string } {
@@ -259,8 +238,8 @@ function parseTransactions(text: string): Transaction[] {
       else deposits = amount;
 
       transactions.push({
-        date: formatDate(date),
-        valueDate: formatDate(valueDate),
+        date: formatDateFromDash(date),
+        valueDate: formatDateFromDash(valueDate),
         particulars: normalizeParticulars(particulars),
         tranType,
         tranId,

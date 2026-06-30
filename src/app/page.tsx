@@ -3,19 +3,33 @@
 import { useMemo, useState } from "react";
 
 import { convertPdfFileToExcel } from "@/lib/convert";
+import {
+  PdfPasswordIncorrectError,
+  PdfPasswordRequiredError,
+} from "@/lib/pdf/errors";
 
 type Status = "idle" | "converting" | "success" | "error";
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
+  const [password, setPassword] = useState("");
+  const [needsPassword, setNeedsPassword] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
   const [transactionCount, setTransactionCount] = useState<number | null>(null);
+  const [bankName, setBankName] = useState<string | null>(null);
 
   const canConvert = useMemo(
-    () => !!file && status !== "converting",
-    [file, status],
+    () => !!file && status !== "converting" && (!needsPassword || password.length > 0),
+    [file, status, needsPassword, password],
   );
+
+  function resetStatus() {
+    setStatus("idle");
+    setMessage("");
+    setTransactionCount(null);
+    setBankName(null);
+  }
 
   async function handleConvert() {
     if (!file) return;
@@ -23,21 +37,41 @@ export default function Home() {
     setStatus("converting");
     setMessage("");
     setTransactionCount(null);
+    setBankName(null);
 
     try {
-      const { blob, filename, transactionCount: count } = await convertPdfFileToExcel(file);
+      const result = await convertPdfFileToExcel(
+        file,
+        needsPassword || password ? password : undefined,
+      );
 
-      const url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(result.blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = filename;
+      link.download = result.filename;
       link.click();
       URL.revokeObjectURL(url);
 
+      setNeedsPassword(false);
       setStatus("success");
-      setTransactionCount(count);
+      setTransactionCount(result.transactionCount);
+      setBankName(result.bankName);
       setMessage("Excel file downloaded successfully.");
     } catch (error) {
+      if (error instanceof PdfPasswordRequiredError) {
+        setNeedsPassword(true);
+        setStatus("error");
+        setMessage(error.message);
+        return;
+      }
+
+      if (error instanceof PdfPasswordIncorrectError) {
+        setNeedsPassword(true);
+        setStatus("error");
+        setMessage(error.message);
+        return;
+      }
+
       setStatus("error");
       setMessage(error instanceof Error ? error.message : "Conversion failed.");
     }
@@ -54,9 +88,9 @@ export default function Home() {
             Convert bank statements to Excel
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
-            Upload a Federal Bank PDF statement and download a structured Excel
-            workbook. Everything runs in your browser, so your statement never
-            leaves your device.
+            Upload a bank statement PDF and download a structured Excel workbook.
+            Supports Federal Bank, SBI, and HDFC. Everything runs in your browser,
+            so your statement never leaves your device.
           </p>
 
           <div className="mt-8 rounded-2xl border border-dashed border-white/20 bg-slate-950/40 p-6">
@@ -78,13 +112,36 @@ export default function Home() {
                 onChange={(event) => {
                   const selected = event.target.files?.[0] ?? null;
                   setFile(selected);
-                  setStatus("idle");
-                  setMessage("");
-                  setTransactionCount(null);
+                  setPassword("");
+                  setNeedsPassword(false);
+                  resetStatus();
                 }}
               />
             </label>
           </div>
+
+          {needsPassword ? (
+            <div className="mt-4">
+              <label htmlFor="pdf-password" className="text-sm text-slate-300">
+                PDF password
+              </label>
+              <input
+                id="pdf-password"
+                type="password"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  resetStatus();
+                }}
+                placeholder="Enter PDF password"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none ring-emerald-400/40 focus:ring-2"
+              />
+              <p className="mt-2 text-xs text-slate-500">
+                The password is used only in your browser to unlock the PDF. The Excel
+                file is saved without any password.
+              </p>
+            </div>
+          ) : null}
 
           <button
             type="button"
@@ -104,6 +161,7 @@ export default function Home() {
               }`}
             >
               {message}
+              {bankName ? ` Detected bank: ${bankName}.` : null}
               {transactionCount ? ` Extracted ${transactionCount} transactions.` : null}
             </div>
           ) : null}
@@ -126,7 +184,7 @@ export default function Home() {
         </div>
 
         <p className="mt-6 text-center text-sm text-slate-500">
-          Client-side conversion with pdf-parse and xlsx-js-style. Supports Federal Bank statements today.
+          Client-side conversion with pdf-parse and xlsx-js-style.
         </p>
       </main>
     </div>
