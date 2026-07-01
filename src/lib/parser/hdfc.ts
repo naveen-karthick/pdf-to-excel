@@ -7,14 +7,23 @@ import {
 } from "@/lib/parser/shared";
 
 const TXN_DATE_START_RE = /^(\d{2}\/\d{2}\/\d{2,4})\s+/;
+const TXN_DATE_ONLY_RE = /^(\d{2}\/\d{2}\/\d{2,4})$/;
 
 const AMOUNTS_SUFFIX_RE =
-  /\s+(\d{2}\/\d{2}\/\d{2,4})\s+([\d,]+\.\d{2})(?:\s+([\d,]+\.\d{2}))?$/;
+  /\s+(\d{2}\/\d{2}\/\d{2,4})\s+([\d,]+\.\d{2})(?:\s+([\d,]+\.\d{2}))?(?:\s+([\d,]+\.\d{2}))?$/;
+
+const SUMMARY_AMOUNT_RE = /^[\d,]+\.\d{2}$/;
+
+const SUMMARY_BLOCK_START_RE = /^Cr Count$|^\*\*END OF STATEMENT\*\*$/i;
 
 const SUMMARY_DATA_RE =
   /^([\d,]+\.\d{2})\s+\d+\s+\d+\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$/;
 
 const PAGE_BREAK_RE = /^-- \d+ of \d+ --$/;
+
+function isTransactionDateLine(line: string): boolean {
+  return TXN_DATE_START_RE.test(line) || TXN_DATE_ONLY_RE.test(line);
+}
 
 function isSkipLine(line: string): boolean {
   return (
@@ -24,8 +33,15 @@ function isSkipLine(line: string): boolean {
     /^Statement of account/i.test(line) ||
     /^Date\s+Narration/i.test(line) ||
     /^Chq\./i.test(line) ||
-    /^Withdrawal Amt/i.test(line) ||
+    /^Withdrawal Amt|^Deposit Amount|^Closing Balance\*?$/i.test(line) ||
     /^Closing Balance Dr Count/i.test(line) ||
+    /^Cr Count$/i.test(line) ||
+    /^Dr Count$/i.test(line) ||
+    /^Debits$/i.test(line) ||
+    /^Credits$/i.test(line) ||
+    /^Opening Balance$/i.test(line) ||
+    /^\*\*END OF STATEMENT\*\*$/i.test(line) ||
+    /^Expected AMB\s*:/i.test(line) ||
     /^Generated On/i.test(line) ||
     /^This is a computer generated/i.test(line) ||
     /^STATEMENT SUMMARY/i.test(line) ||
@@ -48,7 +64,7 @@ function isSkipLine(line: string): boolean {
 }
 
 function isTrailingNarrationLine(line: string): boolean {
-  if (TXN_DATE_START_RE.test(line) || AMOUNTS_SUFFIX_RE.test(line)) {
+  if (isTransactionDateLine(line) || AMOUNTS_SUFFIX_RE.test(line)) {
     return false;
   }
 
@@ -131,13 +147,32 @@ function parseAmountSuffix(
   const suffixMatch = line.match(AMOUNTS_SUFFIX_RE);
   if (!suffixMatch) return null;
 
-  const [, valueDate, firstAmount, secondAmount] = suffixMatch;
-  if (!secondAmount) return null;
-
+  const [, valueDate, firstAmount, secondAmount, thirdAmount] = suffixMatch;
   const refNo = refPrefix.trim() || narration.match(/\b(\d{8,})\b/)?.[1] || "";
   const particulars = refPrefix
     ? normalizeParticulars([narration, refPrefix].filter(Boolean).join(" "))
     : normalizeParticulars(narration);
+
+  if (thirdAmount) {
+    const withdrawal = parseAmount(firstAmount);
+    const deposit = parseAmount(secondAmount);
+    const balance = parseAmount(thirdAmount);
+
+    const transaction = buildTransaction(
+      txnDate,
+      valueDate,
+      particulars,
+      refNo,
+      withdrawal > 0 ? firstAmount : undefined,
+      deposit > 0 ? secondAmount : undefined,
+      thirdAmount,
+    );
+
+    return { transaction, balance };
+  }
+
+  if (!secondAmount) return null;
+
   const amount = parseAmount(firstAmount);
   const balance = parseAmount(secondAmount);
   const kind = classifyTransactionAmount(particulars, amount, balance, previousBalance);
@@ -171,13 +206,70 @@ function parseSingleLineTransaction(
   return parseAmountSuffix(line, narration, txnDate, "", previousBalance);
 }
 
+function buildSummaryRow(
+  particulars: string,
+  balance: number,
+  withdrawals: number | "" = "",
+  deposits: number | "" = "",
+): Transaction {
+  return {
+    date: "",
+    valueDate: "",
+    particulars,
+    tranType: "",
+    tranId: "",
+    chequeDetails: "",
+    withdrawals,
+    deposits,
+    balance,
+    balanceType: "CR",
+  };
+}
+
+function parseSplitLineSummary(lines: string[]): {
+  opening: Transaction | null;
+  closing: Transaction | null;
+} {
+  let openingBalance: number | null = null;
+  let closingBalance: number | null = null;
+  let totalWithdrawals: number | "" = "";
+  let totalDeposits: number | "" = "";
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]?.trim() ?? "";
+    const nextLine = lines[index + 1]?.trim() ?? "";
+
+    if (/^Opening Balance$/i.test(line) && SUMMARY_AMOUNT_RE.test(nextLine)) {
+      openingBalance = parseAmount(nextLine);
+    } else if (/^Closing Balance$/i.test(line) && SUMMARY_AMOUNT_RE.test(nextLine)) {
+      closingBalance = parseAmount(nextLine);
+    } else if (/^Debits$/i.test(line) && SUMMARY_AMOUNT_RE.test(nextLine)) {
+      totalWithdrawals = parseAmount(nextLine);
+    } else if (/^Credits$/i.test(line) && SUMMARY_AMOUNT_RE.test(nextLine)) {
+      totalDeposits = parseAmount(nextLine);
+    }
+  }
+
+  if (openingBalance === null || closingBalance === null) {
+    return { opening: null, closing: null };
+  }
+
+  return {
+    opening: buildSummaryRow("Opening Balance", openingBalance),
+    closing: buildSummaryRow(
+      "GRAND TOTAL",
+      closingBalance,
+      totalWithdrawals,
+      totalDeposits,
+    ),
+  };
+}
+
 function parseStatementSummary(text: string): {
   opening: Transaction | null;
   closing: Transaction | null;
 } {
   const lines = text.split("\n").map((line) => line.trim());
-  let opening: Transaction | null = null;
-  let closing: Transaction | null = null;
 
   for (let index = 0; index < lines.length; index += 1) {
     if (!/^Opening Balance Dr Count/i.test(lines[index] ?? "")) continue;
@@ -188,35 +280,18 @@ function parseStatementSummary(text: string): {
     const match = dataLine.match(SUMMARY_DATA_RE);
     if (!match) break;
 
-    opening = {
-      date: "",
-      valueDate: "",
-      particulars: "Opening Balance",
-      tranType: "",
-      tranId: "",
-      chequeDetails: "",
-      withdrawals: "",
-      deposits: "",
-      balance: parseAmount(match[1]),
-      balanceType: "CR",
+    return {
+      opening: buildSummaryRow("Opening Balance", parseAmount(match[1])),
+      closing: buildSummaryRow(
+        "GRAND TOTAL",
+        parseAmount(match[4]),
+        parseAmount(match[2]),
+        parseAmount(match[3]),
+      ),
     };
-
-    closing = {
-      date: "",
-      valueDate: "",
-      particulars: "GRAND TOTAL",
-      tranType: "",
-      tranId: "",
-      chequeDetails: "",
-      withdrawals: parseAmount(match[2]),
-      deposits: parseAmount(match[3]),
-      balance: parseAmount(match[4]),
-      balanceType: "CR",
-    };
-    break;
   }
 
-  return { opening, closing };
+  return parseSplitLineSummary(lines);
 }
 
 function parseTransactions(text: string, openingBalance: number | null = null): Transaction[] {
@@ -280,6 +355,10 @@ function parseTransactions(text: string, openingBalance: number | null = null): 
       continue;
     }
 
+    if (SUMMARY_BLOCK_START_RE.test(line)) {
+      break;
+    }
+
     if (PAGE_BREAK_RE.test(line)) {
       afterPageBreak = true;
       pageBreakOrphans = [];
@@ -292,7 +371,7 @@ function parseTransactions(text: string, openingBalance: number | null = null): 
         continue;
       }
 
-      if (TXN_DATE_START_RE.test(line)) {
+      if (isTransactionDateLine(line)) {
         flushPageBreakOrphans();
         afterPageBreak = false;
       } else {
@@ -316,6 +395,15 @@ function parseTransactions(text: string, openingBalance: number | null = null): 
       lastTransactionIndex = transactions.length - 1;
       previousBalance = singleLine.balance;
       acceptTrailingNarration = true;
+      continue;
+    }
+
+    const dateOnlyMatch = line.match(TXN_DATE_ONLY_RE);
+    if (dateOnlyMatch) {
+      resetPending();
+      acceptTrailingNarration = false;
+      pendingDate = dateOnlyMatch[1];
+      pendingNarration = [];
       continue;
     }
 
